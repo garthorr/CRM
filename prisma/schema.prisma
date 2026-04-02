@@ -1,0 +1,304 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Auth (Auth.js v5 / NextAuth PrismaAdapter) ───────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?   // bcrypt hash — null for OAuth-only users
+
+  // Google API tokens stored for server-side API calls
+  googleAccessToken  String?   @db.Text
+  googleRefreshToken String?   @db.Text
+  googleTokenExpiry  DateTime?
+
+  accounts Account[]
+  sessions Session[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// NextAuth PrismaAdapter requires model names "Account" and "Session".
+// We use @@map to rename the tables so they don't collide with CRM entities.
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("auth_account")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("auth_session")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("auth_verification_token")
+}
+
+// ─── CRM Enums ────────────────────────────────────────────────────────────────
+
+enum ContactType {
+  STUDENT
+  PARENT_GUARDIAN
+  OTHER
+}
+
+enum SessionStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum EntityType {
+  ACCOUNT
+  CONTACT
+  SCHOOL
+  SESSION
+}
+
+enum FieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  SELECT
+  MULTI_SELECT
+  CHECKBOX
+  PHONE
+  EMAIL
+  URL
+}
+
+// ─── CRM Core ─────────────────────────────────────────────────────────────────
+
+model CrmAccount {
+  id         String   @id @default(cuid())
+  name       String
+  notes      String?  @db.Text
+  customData Json     @default("{}")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  contacts     Contact[]
+  emailThreads EmailThread[]
+
+  @@map("crm_account")
+}
+
+model Contact {
+  id         String      @id @default(cuid())
+  accountId  String
+  type       ContactType
+  firstName  String
+  lastName   String
+  email      String?
+  phone      String?
+  notes      String?     @db.Text
+  customData Json        @default("{}")
+
+  // STUDENT-only linkage
+  schoolId   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  account        CrmAccount       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  school         School?          @relation(fields: [schoolId], references: [id])
+  contactPeriods ContactPeriod[]
+  crmSessions    CrmSession[]
+  subjects       ContactSubject[]
+
+  @@map("contact")
+}
+
+model School {
+  id         String   @id @default(cuid())
+  name       String
+  address    String?
+  city       String?
+  state      String?
+  phone      String?
+  website    String?
+  notes      String?  @db.Text
+  customData Json     @default("{}")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  periods  SchoolPeriod[]
+  contacts Contact[]
+
+  @@map("school")
+}
+
+model SchoolPeriod {
+  id       String @id @default(cuid())
+  schoolId String
+  name     String
+  position Int
+
+  school         School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  contactPeriods ContactPeriod[]
+
+  @@map("school_period")
+}
+
+model ContactPeriod {
+  id          String  @id @default(cuid())
+  contactId   String
+  periodId    String
+  isFree      Boolean @default(false)
+  isPreferred Boolean @default(false)
+
+  contact Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  period  SchoolPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, periodId])
+  @@map("contact_period")
+}
+
+model Subject {
+  id   String @id @default(cuid())
+  name String @unique
+
+  contactSubjects ContactSubject[]
+
+  @@map("subject")
+}
+
+model ContactSubject {
+  id        String @id @default(cuid())
+  contactId String
+  subjectId String
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, subjectId])
+  @@map("contact_subject")
+}
+
+model CrmSession {
+  id            String        @id @default(cuid())
+  contactId     String
+  date          DateTime
+  durationMins  Int           @default(60)
+  subject       String?
+  status        SessionStatus @default(SCHEDULED)
+  notes         String?       @db.Text
+  googleEventId String?
+  customData    Json          @default("{}")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@map("crm_session")
+}
+
+// ─── Custom Fields ─────────────────────────────────────────────────────────────
+
+model FieldSection {
+  id         String     @id @default(cuid())
+  entityType EntityType
+  name       String
+  position   Int
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  fieldDefinitions FieldDefinition[]
+
+  @@map("field_section")
+}
+
+model FieldDefinition {
+  id        String    @id @default(cuid())
+  sectionId String
+  fieldKey  String
+  label     String
+  fieldType FieldType
+  options   Json?
+  position  Int
+  required  Boolean   @default(false)
+  visible   Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  section FieldSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@unique([sectionId, fieldKey])
+  @@map("field_definition")
+}
+
+// ─── Gmail Integration ─────────────────────────────────────────────────────────
+
+model EmailThread {
+  id              String    @id @default(cuid())
+  accountId       String
+  gmailThreadId   String    @unique
+  subject         String?
+  snippet         String?
+  lastMessageDate DateTime?
+  unread          Boolean   @default(false)
+  syncedAt        DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  account  CrmAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  messages EmailMessage[]
+
+  @@map("email_thread")
+}
+
+model EmailMessage {
+  id             String    @id @default(cuid())
+  threadId       String
+  gmailMessageId String    @unique
+  from           String?
+  to             String?
+  subject        String?
+  snippet        String?
+  bodyHtml       String?   @db.Text
+  bodyText       String?   @db.Text
+  sentAt         DateTime?
+  syncedAt       DateTime  @default(now())
+
+  thread EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@map("email_message")
+}
